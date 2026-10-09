@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.sandbox.example
+
+*.log
+
+# local runtime artifacts
+storage/
+
+# docker compose overrides
+docker-compose.override.yml
