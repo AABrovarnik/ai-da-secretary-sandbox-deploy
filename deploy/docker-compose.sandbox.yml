@@ -15,9 +15,8 @@ services:
       retries: 10
 
   backend:
-    build:
-      context: ..
-      dockerfile: docker/backend.Dockerfile
+    image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE to the published backend image}:${BACKEND_TAG:?Set BACKEND_TAG to an immutable published tag}
+    pull_policy: always
     restart: unless-stopped
     env_file:
       - .env.sandbox
@@ -33,11 +32,8 @@ services:
       - "127.0.0.1:${BACKEND_PORT}:4000"
 
   frontend:
-    build:
-      context: ..
-      dockerfile: docker/frontend.Dockerfile
-      args:
-        VITE_API_BASE_URL: /api
+    image: ${FRONTEND_IMAGE:?Set FRONTEND_IMAGE to the published frontend image}:${FRONTEND_TAG:?Set FRONTEND_TAG to an immutable published tag}
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       - backend

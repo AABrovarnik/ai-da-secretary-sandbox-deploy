@@ -1,84 +1,42 @@
-# AI-да-Секретарь: деплой в WEB-песочницу
+# AI-да-Секретарь: image-only deploy в WEB-песочницу
 
-## Цель
-Развернуть приложение изолированно в Docker Compose и опубликовать через существующий host Nginx на `sandbox.xn--01-dlcyz9d7b.xn--p1ai`, не затрагивая текущий сайт.
+Compose получает готовые backend/frontend images из registry. Локальная сборка из этого deploy-репозитория не используется. Публикация images приложением и соответствие package refs описаны в `IMAGE_ONLY_DEPLOY_PROPOSAL.md`.
 
-## 1) Подготовка на сервере
-```bash
-mkdir -p /srv/ai-shared/web-sandbox/ai-da-secretary
-cd /srv/ai-shared/web-sandbox/ai-da-secretary
-# git clone <repo-url> .
-cp deploy/.env.sandbox.example deploy/.env.sandbox
-```
+## 1) Подготовка конфигурации
 
-Заполнить `deploy/.env.sandbox`:
-- `POSTGRES_PASSWORD`
-- `SESSION_SECRET`
-- `OPENAI_API_KEY`
-
-## 2) Запуск compose
 ```bash
 cd /srv/ai-shared/web-sandbox/ai-da-secretary/deploy
-docker compose --env-file .env.sandbox -f docker-compose.sandbox.yml up -d --build
+cp -n .env.sandbox.example .env.sandbox
+```
+
+В `deploy/.env.sandbox` обязательно задать опубликованные image names `BACKEND_IMAGE`/`FRONTEND_IMAGE` и их `BACKEND_TAG`/`FRONTEND_TAG` (immutable commit/release tags; не `latest`), секреты `POSTGRES_PASSWORD`, `SESSION_SECRET`, `OPENAI_API_KEY` и при необходимости порты. Для приватного GHCR выполнить `docker login ghcr.io` безопасным способом; токен не хранить в репозитории или `.env.sandbox`.
+
+## 2) Проверка, pull и запуск
+
+Из каталога `deploy`:
+
+```bash
+docker compose --env-file .env.sandbox -f docker-compose.sandbox.yml config --quiet
+docker compose --env-file .env.sandbox -f docker-compose.sandbox.yml pull
+docker compose --env-file .env.sandbox -f docker-compose.sandbox.yml up -d --no-build --pull always
 docker compose --env-file .env.sandbox -f docker-compose.sandbox.yml ps
 ```
 
-Проверки localhost на сервере:
+`config` должен завершиться без ошибок; `pull` должен получить все образы; `up` не должен собирать images локально. Не использовать `down -v`: sandbox database/audio volumes содержат постоянные данные.
+
+## 3) Runtime smoke
+
 ```bash
-curl -I http://127.0.0.1:18080/
-curl -I http://127.0.0.1:18081/health
+curl -fsS -I http://127.0.0.1:18080/
+curl -fsS http://127.0.0.1:18081/health
 ```
 
-## 3) Nginx host-route (отдельный vhost)
-Создать новый server block для sandbox-хоста (без правки текущего academy vhost):
+Ожидается успешный HTTP-ответ UI и backend health endpoint. Затем выполнить application smoke: register/login, создать meeting, загрузить `.ogg`, запустить `process-latest-audio`, подтвердить `ProcessingRun.status = succeeded`.
 
-```nginx
-server {
-  listen 80;
-  server_name sandbox.xn--01-dlcyz9d7b.xn--p1ai;
+## 4) Nginx/TLS и внешний smoke
 
-  location / {
-    proxy_pass http://127.0.0.1:18080;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-  }
-}
-```
+Действующие server block, выпуск TLS и внешние проверки остаются отдельным системным этапом; этот image-only change их не выполняет и не меняет.
 
-После этого:
-```bash
-nginx -t
-systemctl reload nginx
-```
+## 5) Rollback
 
-## 4) TLS для sandbox hostname
-Выпустить отдельный сертификат на sandbox hostname (без замены сертификата текущего сайта).
-Проверить:
-```bash
-openssl s_client -connect sandbox.xn--01-dlcyz9d7b.xn--p1ai:443 -servername sandbox.xn--01-dlcyz9d7b.xn--p1ai </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName
-```
-
-## 5) Smoke-тест приложения
-С локальной машины/или на сервере через проброс:
-- зайти в UI
-- зарегистрироваться/войти
-- создать meeting
-- загрузить `audio_2026-10-06_16-15-16.ogg`
-- запустить process-latest-audio
-- проверить переход run в `succeeded`
-
-CLI сценарий:
-```powershell
-pwsh -File .\scripts\smoke-audio.ps1 -ApiBase "https://sandbox.xn--01-dlcyz9d7b.xn--p1ai" -AudioPath "C:\Users\aabro\Downloads\audio_2026-10-06_16-15-16.ogg"
-```
-
-## 6) Обновление
-```bash
-cd /srv/ai-shared/web-sandbox/ai-da-secretary
-git pull
-cd deploy
-docker compose --env-file .env.sandbox -f docker-compose.sandbox.yml up -d --build
-```
+Сохранить текущие image names/tags. Для rollback вернуть предыдущие `BACKEND_TAG`/`FRONTEND_TAG` в `.env.sandbox`, затем повторить `pull` и `up -d --no-build --pull always`. Не удалять volumes при rollback.
